@@ -1,0 +1,11 @@
+# Terraform local artifacts
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+*.tfplan
+
+# OS / editor
+.DS_Store
+Thumbs.db
