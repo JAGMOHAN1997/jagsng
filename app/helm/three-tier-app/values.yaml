@@ -1,0 +1,41 @@
+fullnameOverride: three-tier-app
+imagePullSecrets: []
+
+frontend:
+  replicaCount: 1
+  image:
+    repository: three-tier-frontend
+    tag: local
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+
+backend:
+  replicaCount: 1
+  image:
+    repository: three-tier-backend
+    tag: local
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  env:
+    dbName: appdb
+    dbUser: appuser
+    dbPassword: apppass
+    dbPort: "5432"
+    dbSslMode: disable
+
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
