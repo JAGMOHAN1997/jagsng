@@ -1,15 +1,21 @@
-image: hashicorp/terraform:1.14.5
-
 stages:
-  - fmt_validate
-  - plan
-  - apply
+  - terraform_validate
+  - terraform_plan
+  - terraform_apply
+  - app_validate
+  - app_build
+  - app_deploy
 
 variables:
   TF_IN_AUTOMATION: "true"
+  K8S_NAMESPACE: "three-tier-app"
+  HELM_RELEASE: "three-tier-app"
+  FRONTEND_IMAGE_NAME: "frontend"
+  BACKEND_IMAGE_NAME: "backend"
 
-fmt_validate:
-  stage: fmt_validate
+terraform_fmt_validate:
+  stage: terraform_validate
+  image: hashicorp/terraform:1.14.5
   script:
     - terraform -chdir=terraform fmt -check -recursive
     - |
@@ -21,8 +27,9 @@ fmt_validate:
         terraform -chdir="$component" validate
       done
 
-plan:
-  stage: plan
+terraform_plan:
+  stage: terraform_plan
+  image: hashicorp/terraform:1.14.5
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
   script:
@@ -40,8 +47,9 @@ plan:
         terraform -chdir="$component" plan -input=false -lock=false -no-color
       done
 
-apply:
-  stage: apply
+terraform_apply:
+  stage: terraform_apply
+  image: hashicorp/terraform:1.14.5
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
       when: manual
@@ -59,3 +67,85 @@ apply:
         terraform -chdir="$component" init -input=false
         terraform -chdir="$component" apply -input=false -auto-approve -lock-timeout=300s
       done
+
+helm_lint:
+  stage: app_validate
+  image: alpine/helm:3.16.4
+  script:
+    - helm lint app/helm/three-tier-app
+    - helm template three-tier-app app/helm/three-tier-app >/dev/null
+
+build_app_images:
+  stage: app_build
+  image: docker:27.4.1-cli
+  services:
+    - name: docker:27.4.1-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - |
+      set -eu
+      echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+
+      BACKEND_IMAGE="$CI_REGISTRY_IMAGE/$BACKEND_IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
+      FRONTEND_IMAGE="$CI_REGISTRY_IMAGE/$FRONTEND_IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
+
+      docker build -t "$BACKEND_IMAGE" app/backend
+      docker build -t "$FRONTEND_IMAGE" app/frontend
+      docker push "$BACKEND_IMAGE"
+      docker push "$FRONTEND_IMAGE"
+
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        docker tag "$BACKEND_IMAGE" "$CI_REGISTRY_IMAGE/$BACKEND_IMAGE_NAME:latest"
+        docker tag "$FRONTEND_IMAGE" "$CI_REGISTRY_IMAGE/$FRONTEND_IMAGE_NAME:latest"
+        docker push "$CI_REGISTRY_IMAGE/$BACKEND_IMAGE_NAME:latest"
+        docker push "$CI_REGISTRY_IMAGE/$FRONTEND_IMAGE_NAME:latest"
+      fi
+
+deploy_app_k8s:
+  stage: app_deploy
+  image: dtzar/helm-kubectl:3.16.3
+  needs:
+    - build_app_images
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+  script:
+    - |
+      set -eu
+
+      if [ -n "${KUBE_CONFIG:-}" ]; then
+        mkdir -p "$HOME/.kube"
+        echo "$KUBE_CONFIG" | base64 -d > "$HOME/.kube/config"
+      fi
+
+      kubectl get namespace "$K8S_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$K8S_NAMESPACE"
+
+      if [ -z "${CI_REGISTRY_USER:-}" ] || [ -z "${CI_REGISTRY_PASSWORD:-}" ]; then
+        echo "CI_REGISTRY_USER and CI_REGISTRY_PASSWORD are required for Kubernetes image pull secret."
+        exit 1
+      fi
+
+      kubectl create secret docker-registry gitlab-registry-creds \
+        --namespace "$K8S_NAMESPACE" \
+        --docker-server="$CI_REGISTRY" \
+        --docker-username="$CI_REGISTRY_USER" \
+        --docker-password="$CI_REGISTRY_PASSWORD" \
+        --dry-run=client -o yaml | kubectl apply -f -
+
+      helm upgrade --install "$HELM_RELEASE" app/helm/three-tier-app \
+        --namespace "$K8S_NAMESPACE" \
+        --create-namespace \
+        --set frontend.image.repository="$CI_REGISTRY_IMAGE/$FRONTEND_IMAGE_NAME" \
+        --set frontend.image.tag="$CI_COMMIT_SHORT_SHA" \
+        --set frontend.image.pullPolicy="IfNotPresent" \
+        --set backend.image.repository="$CI_REGISTRY_IMAGE/$BACKEND_IMAGE_NAME" \
+        --set backend.image.tag="$CI_COMMIT_SHORT_SHA" \
+        --set backend.image.pullPolicy="IfNotPresent" \
+        --set imagePullSecrets[0].name="gitlab-registry-creds" \
+        --set backend.env.dbPassword="${DB_PASSWORD:-apppass}"
+
+      kubectl -n "$K8S_NAMESPACE" rollout status deploy/"$HELM_RELEASE"-postgres --timeout=180s
+      kubectl -n "$K8S_NAMESPACE" rollout status deploy/"$HELM_RELEASE"-backend --timeout=180s
+      kubectl -n "$K8S_NAMESPACE" rollout status deploy/"$HELM_RELEASE"-frontend --timeout=180s
