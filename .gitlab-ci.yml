@@ -1,0 +1,61 @@
+image: hashicorp/terraform:1.14.5
+
+stages:
+  - fmt_validate
+  - plan
+  - apply
+
+variables:
+  TF_IN_AUTOMATION: "true"
+
+fmt_validate:
+  stage: fmt_validate
+  script:
+    - terraform -chdir=terraform fmt -check -recursive
+    - |
+      set -eu
+      for component in terraform/components/*; do
+        [ -d "$component" ] || continue
+        echo "Validating $component"
+        terraform -chdir="$component" init -input=false -backend=false
+        terraform -chdir="$component" validate
+      done
+
+plan:
+  stage: plan
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - |
+      set -eu
+      if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+        echo "Skipping plan because AWS credentials are not configured in CI variables."
+        exit 0
+      fi
+
+      for component in terraform/components/*; do
+        [ -d "$component" ] || continue
+        echo "Planning $component"
+        terraform -chdir="$component" init -input=false
+        terraform -chdir="$component" plan -input=false -lock=false -no-color
+      done
+
+apply:
+  stage: apply
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+  script:
+    - |
+      set -eu
+      if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+        echo "AWS credentials are required for apply."
+        exit 1
+      fi
+
+      for component in terraform/components/*; do
+        [ -d "$component" ] || continue
+        echo "Applying $component"
+        terraform -chdir="$component" init -input=false
+        terraform -chdir="$component" apply -input=false -auto-approve -lock-timeout=300s
+      done

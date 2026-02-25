@@ -1,0 +1,17 @@
+project_name         = "myapp"
+environment          = "dev"
+aws_region           = "us-east-1"
+allowed_ssh_cidr     = "203.0.113.10/32"
+ec2_instance_type    = "t3.micro"
+ec2_key_name         = "my-keypair"
+db_name              = "myappdb"
+db_username          = "dbadmin"
+db_instance_class    = "db.t3.micro"
+db_allocated_storage = 20
+container_image_tag  = "latest"
+ecs_desired_count    = 1
+
+common_tags = {
+  Owner      = "platform-team"
+  CostCenter = "engineering"
+}
