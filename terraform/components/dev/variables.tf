@@ -35,9 +35,15 @@ variable "private_subnet_cidrs" {
 }
 
 variable "allowed_ssh_cidr" {
-  description = "CIDR allowed to SSH into EC2."
+  description = "CIDR allowed to SSH into EC2. Null disables SSH ingress."
   type        = string
-  default     = "0.0.0.0/0"
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.allowed_ssh_cidr == null || var.allowed_ssh_cidr != "0.0.0.0/0"
+    error_message = "Do not use 0.0.0.0/0 for SSH. Provide a restricted CIDR or set null to disable SSH ingress."
+  }
 }
 
 variable "ec2_instance_type" {

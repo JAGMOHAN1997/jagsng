@@ -23,7 +23,7 @@ backend:
   env:
     dbName: appdb
     dbUser: appuser
-    dbPassword: apppass
+    dbPassword: ""
     dbPort: "5432"
     dbSslMode: disable
 

@@ -127,6 +127,12 @@ deploy_app_k8s:
         exit 1
       fi
 
+      if [ -z "${DB_PASSWORD:-}" ]; then
+        echo "DB_PASSWORD is required for Helm deploy."
+        exit 1
+      fi
+
+
       kubectl create secret docker-registry gitlab-registry-creds \
         --namespace "$K8S_NAMESPACE" \
         --docker-server="$CI_REGISTRY" \
@@ -144,7 +150,7 @@ deploy_app_k8s:
         --set backend.image.tag="$CI_COMMIT_SHORT_SHA" \
         --set backend.image.pullPolicy="IfNotPresent" \
         --set imagePullSecrets[0].name="gitlab-registry-creds" \
-        --set backend.env.dbPassword="${DB_PASSWORD:-apppass}"
+        --set backend.env.dbPassword="${DB_PASSWORD}"
 
       kubectl -n "$K8S_NAMESPACE" rollout status deploy/"$HELM_RELEASE"-postgres --timeout=180s
       kubectl -n "$K8S_NAMESPACE" rollout status deploy/"$HELM_RELEASE"-backend --timeout=180s

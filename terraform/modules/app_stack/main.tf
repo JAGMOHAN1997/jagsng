@@ -136,8 +136,8 @@ resource "aws_security_group" "ecs_service" {
 
   ingress {
     description     = "App traffic from ALB"
-    from_port       = 8080
-    to_port         = 8080
+    from_port       = 8000
+    to_port         = 8000
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
@@ -157,12 +157,16 @@ resource "aws_security_group" "ec2" {
   description = "Allow SSH access and outbound traffic"
   vpc_id      = aws_vpc.main.id
 
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.allowed_ssh_cidr]
+  dynamic "ingress" {
+    for_each = var.allowed_ssh_cidr == null ? [] : [var.allowed_ssh_cidr]
+
+    content {
+      description = "SSH"
+      from_port   = 22
+      to_port     = 22
+      protocol    = "tcp"
+      cidr_blocks = [ingress.value]
+    }
   }
 
   egress {
@@ -371,7 +375,7 @@ resource "aws_lb" "app" {
 
 resource "aws_lb_target_group" "app" {
   name        = "${substr(local.name_prefix, 0, 20)}-tg"
-  port        = 8080
+  port        = 8000
   protocol    = "HTTP"
   target_type = "ip"
   vpc_id      = aws_vpc.main.id
@@ -381,7 +385,7 @@ resource "aws_lb_target_group" "app" {
     healthy_threshold   = 2
     interval            = 30
     matcher             = "200-399"
-    path                = "/"
+    path                = "/health"
     timeout             = 5
     unhealthy_threshold = 2
   }
@@ -416,8 +420,8 @@ resource "aws_ecs_task_definition" "app" {
       essential = true
       portMappings = [
         {
-          containerPort = 8080
-          hostPort      = 8080
+          containerPort = 8000
+          hostPort      = 8000
           protocol      = "tcp"
         }
       ]
@@ -437,6 +441,14 @@ resource "aws_ecs_task_definition" "app" {
         {
           name  = "DB_USER"
           value = aws_db_instance.app.username
+        },
+        {
+          name  = "DB_PASSWORD"
+          value = random_password.db_password.result
+        },
+        {
+          name  = "PORT"
+          value = "8000"
         }
       ]
       logConfiguration = {
@@ -469,7 +481,7 @@ resource "aws_ecs_service" "app" {
   load_balancer {
     target_group_arn = aws_lb_target_group.app.arn
     container_name   = "app"
-    container_port   = 8080
+    container_port   = 8000
   }
 
   depends_on = [aws_lb_listener.http]
@@ -524,7 +536,7 @@ resource "aws_db_instance" "app" {
   vpc_security_group_ids = [aws_security_group.rds.id]
   skip_final_snapshot    = true
   publicly_accessible    = false
-  deletion_protection    = false
+  deletion_protection    = true
   multi_az               = false
 
   tags = local.tags
